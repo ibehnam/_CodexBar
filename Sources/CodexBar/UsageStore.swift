@@ -190,7 +190,9 @@ final class UsageStore: ObservableObject {
     }
 
     var iconStyle: IconStyle {
-        self.isEnabled(.claude) ? .claude : .codex
+        let bothEnabled = self.isEnabled(.codex) && self.isEnabled(.claude)
+        if bothEnabled { return .combined }
+        return self.isEnabled(.claude) ? .claude : .codex
     }
 
     var isStale: Bool {

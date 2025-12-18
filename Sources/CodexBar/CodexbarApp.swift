@@ -232,9 +232,8 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
     private let settings: SettingsStore
     private let account: AccountInfo
     private let updater: UpdaterProviding
-    private var statusItems: [UsageProvider: NSStatusItem] = [:]
+    private var statusItem: NSStatusItem
     private(set) var lastMenuProvider: UsageProvider?
-    private var menuProviders: [ObjectIdentifier: UsageProvider] = [:]
     private var blinkTask: Task<Void, Never>?
     private var loginTask: Task<Void, Never>? {
         didSet { self.refreshMenusForLoginStateChange() }
@@ -304,12 +303,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         self.updater = updater
         self.preferencesSelection = preferencesSelection
         let bar = NSStatusBar.system
-        for provider in UsageProvider.allCases {
-            let item = bar.statusItem(withLength: NSStatusItem.variableLength)
-            // Ensure the icon is rendered at 1:1 without resampling (crisper edges for template images).
-            item.button?.imageScaling = .scaleNone
-            self.statusItems[provider] = item
-        }
+        let item = bar.statusItem(withLength: NSStatusItem.variableLength)
+        // Ensure the icon is rendered at 1:1 without resampling (crisper edges for template images).
+        item.button?.imageScaling = .scaleNone
+        self.statusItem = item
         super.init()
         self.wireBindings()
         self.updateIcons()
@@ -357,27 +354,19 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
     }
 
     private func updateIcons() {
-        UsageProvider.allCases.forEach { self.applyIcon(for: $0, phase: nil) }
-        self.attachMenus(fallback: self.fallbackProvider)
+        self.applyIcon(phase: nil)
+        self.attachMenus()
         self.updateAnimationState()
         self.updateBlinkingState()
     }
 
     private func updateVisibility() {
-        let fallback = self.fallbackProvider
-        for provider in UsageProvider.allCases {
-            let item = self.statusItems[provider]
-            let isEnabled = self.isEnabled(provider)
-            let force = self.store.debugForceAnimation
-            item?.isVisible = isEnabled || fallback == provider || force
-        }
-        self.attachMenus(fallback: fallback)
+        let anyEnabled = !self.store.enabledProviders().isEmpty
+        let force = self.store.debugForceAnimation
+        self.statusItem.isVisible = anyEnabled || force
+        self.attachMenus()
         self.updateAnimationState()
         self.updateBlinkingState()
-    }
-
-    private var fallbackProvider: UsageProvider? {
-        self.store.enabledProviders().isEmpty ? .codex : nil
     }
 
     private func isEnabled(_ provider: UsageProvider) -> Bool {
@@ -385,27 +374,18 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
     }
 
     private func refreshMenusForLoginStateChange() {
-        self.attachMenus(fallback: self.fallbackProvider)
+        self.attachMenus()
     }
 
-    private func attachMenus(fallback: UsageProvider? = nil) {
-        self.menuProviders.removeAll()
-        for provider in UsageProvider.allCases {
-            guard let item = self.statusItems[provider] else { continue }
-            if self.isEnabled(provider) {
-                item.menu = self.makeMenu(for: provider)
-            } else if fallback == provider {
-                item.menu = self.makeMenu(for: nil)
-            } else {
-                item.menu = nil
-            }
-        }
+    private func attachMenus() {
+        // Single combined menu for all enabled providers
+        self.statusItem.menu = self.makeMenu()
     }
 
     private func updateBlinkingState() {
         let blinkingEnabled = self.isBlinkingAllowed()
-        let anyVisible = UsageProvider.allCases.contains { self.isVisible($0) }
-        if blinkingEnabled, anyVisible {
+        let anyEnabled = !self.store.enabledProviders().isEmpty
+        if blinkingEnabled, anyEnabled {
             if self.blinkTask == nil {
                 self.seedBlinkStatesIfNeeded()
                 self.blinkTask = Task { [weak self] in
@@ -431,7 +411,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         self.blinkTask?.cancel()
         self.blinkTask = nil
         self.blinkAmounts.removeAll()
-        UsageProvider.allCases.forEach { self.applyIcon(for: $0, phase: nil) }
+        self.applyIcon(phase: nil)
     }
 
     private func tickBlink(now: Date = .init()) {
@@ -445,7 +425,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         let doubleDelayRange: ClosedRange<TimeInterval> = 0.22...0.34
 
         for provider in UsageProvider.allCases {
-            guard self.isVisible(provider), !self.shouldAnimate(provider: provider) else {
+            guard self.isEnabled(provider), !self.shouldAnimate(provider: provider) else {
                 self.clearMotion(for: provider)
                 continue
             }
@@ -487,8 +467,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
             }
 
             self.blinkStates[provider] = state
-            self.applyIcon(for: provider, phase: nil)
         }
+        // Apply icon once after processing all providers
+        self.applyIcon(phase: nil)
     }
 
     private func blinkAmount(for provider: UsageProvider) -> CGFloat {
@@ -544,10 +525,6 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         return false
     }
 
-    private func isVisible(_ provider: UsageProvider) -> Bool {
-        self.store.debugForceAnimation || self.isEnabled(provider) || self.fallbackProvider == provider
-    }
-
     private func switchAccountSubtitle(for target: UsageProvider) -> String? {
         guard self.loginTask != nil, let provider = self.activeLoginProvider, provider == target else { return nil }
         let base: String
@@ -559,21 +536,37 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         return provider == .claude ? "Claude: \(base)" : "Codex: \(base)"
     }
 
-    private func applyIcon(for provider: UsageProvider, phase: Double?) {
-        guard let button = self.statusItems[provider]?.button else { return }
-        let snapshot = self.store.snapshot(for: provider)
-        // IconRenderer treats these values as a left-to-right "progress fill" percentage; depending on the
-        // user setting we pass either "percent left" or "percent used".
+    private func applyIcon(phase: Double?) {
+        guard let button = self.statusItem.button else { return }
+
+        let style = self.store.iconStyle
         let showUsed = self.settings.usageBarsShowUsed
+
+        // For combined icon, pick the "primary" provider to display (prefer the one with data)
+        let primaryProvider: UsageProvider = {
+            if self.store.isEnabled(.codex), self.store.snapshot(for: .codex) != nil {
+                return .codex
+            }
+            if self.store.isEnabled(.claude), self.store.snapshot(for: .claude) != nil {
+                return .claude
+            }
+            // Fallback: prefer codex if enabled, otherwise claude
+            return self.store.isEnabled(.codex) ? .codex : .claude
+        }()
+
+        let snapshot = self.store.snapshot(for: primaryProvider)
         var primary = showUsed ? snapshot?.primary.usedPercent : snapshot?.primary.remainingPercent
         var weekly = showUsed ? snapshot?.secondary?.usedPercent : snapshot?.secondary?.remainingPercent
-        var credits: Double? = provider == .codex ? self.store.credits?.remaining : nil
-        var stale = self.store.isStale(provider: provider)
+        var credits: Double? = primaryProvider == .codex ? self.store.credits?.remaining : nil
+        var stale = self.store.isStale(provider: primaryProvider)
         var morphProgress: Double?
 
-        if let phase, self.shouldAnimate(provider: provider) {
+        // Check if any provider needs animation
+        let needsAnimation = UsageProvider.allCases.contains { self.shouldAnimate(provider: $0) }
+        if let phase, needsAnimation {
             var pattern = self.animationPattern
-            if provider == .claude, pattern == .unbraid {
+            // Don't use unbraid for combined style
+            if style == .combined, pattern == .unbraid {
                 pattern = .cylon
             }
             if pattern == .unbraid {
@@ -590,10 +583,20 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
             }
         }
 
-        let style: IconStyle = self.store.style(for: provider)
-        let blink = self.blinkAmount(for: provider)
-        let wiggle = self.wiggleAmount(for: provider)
-        let tilt = self.tiltAmount(for: provider) * .pi / 28 // limit to ~6.4°
+        // For combined style, no blink/wiggle/tilt animations
+        let blink: CGFloat = style == .combined ? 0 : self.blinkAmount(for: primaryProvider)
+        let wiggle: CGFloat = style == .combined ? 0 : self.wiggleAmount(for: primaryProvider)
+        let tilt: CGFloat = style == .combined ? 0 : self.tiltAmount(for: primaryProvider) * .pi / 28
+
+        // Get status indicator from any provider that has an issue
+        let statusIndicator: ProviderStatusIndicator = {
+            for provider in UsageProvider.allCases {
+                let indicator = self.store.statusIndicator(for: provider)
+                if indicator.hasIssue { return indicator }
+            }
+            return .none
+        }()
+
         if let morphProgress {
             button.image = IconRenderer.makeMorphIcon(progress: morphProgress, style: style)
         } else {
@@ -606,7 +609,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
                 blink: blink,
                 wiggle: wiggle,
                 tilt: tilt,
-                statusIndicator: self.store.statusIndicator(for: provider))
+                statusIndicator: statusIndicator)
         }
     }
 
@@ -620,7 +623,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
         self.seedBlinkStatesIfNeeded()
 
         for provider in UsageProvider.allCases
-            where self.isVisible(provider) && !self.shouldAnimate(provider: provider)
+            where self.isEnabled(provider) && !self.shouldAnimate(provider: provider)
         {
             var state = self
                 .blinkStates[provider] ?? BlinkState(nextBlink: now.addingTimeInterval(BlinkState.randomDelay()))
@@ -638,9 +641,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
 
     private func shouldAnimate(provider: UsageProvider) -> Bool {
         if self.store.debugForceAnimation { return true }
-
-        let visible = self.store.debugForceAnimation || self.isEnabled(provider) || self.fallbackProvider == provider
-        guard visible else { return false }
+        guard self.isEnabled(provider) else { return false }
 
         let isStale = self.store.isStale(provider: provider)
         let hasData = self.store.snapshot(for: provider) != nil
@@ -669,13 +670,13 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
             self.animationDisplayLink?.invalidate()
             self.animationDisplayLink = nil
             self.animationPhase = 0
-            UsageProvider.allCases.forEach { self.applyIcon(for: $0, phase: nil) }
+            self.applyIcon(phase: nil)
         }
     }
 
     @objc private func animateIcons(_ link: CADisplayLink) {
         self.animationPhase += 0.045 // half-speed animation
-        UsageProvider.allCases.forEach { self.applyIcon(for: $0, phase: self.animationPhase) }
+        self.applyIcon(phase: self.animationPhase)
     }
 
     private func advanceAnimationPattern() {
@@ -929,40 +930,47 @@ final class StatusItemController: NSObject, NSMenuDelegate, StatusItemControllin
 extension StatusItemController {
     private static let menuCardWidth: CGFloat = 300
 
-    func makeMenu(for provider: UsageProvider?) -> NSMenu {
-        let targetProvider = provider ?? self.store.enabledProviders().first ?? .codex
+    func makeMenu() -> NSMenu {
+        let enabledProviders = self.store.enabledProviders()
         let descriptor = MenuDescriptor.build(
-            provider: provider,
+            provider: nil,
             store: self.store,
             settings: self.settings,
             account: self.account)
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
-        if let provider {
-            self.menuProviders[ObjectIdentifier(menu)] = provider
-        }
 
-        if let model = self.menuCardModel(for: provider) {
-            let cardView = UsageMenuCardView(model: model)
-            let hosting = NSHostingView(rootView: cardView)
-            // Important: constrain width before asking SwiftUI for the fitting height, otherwise text wrapping
-            // changes the required height and the menu item becomes visually "squeezed".
-            hosting.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: 1))
-            hosting.layoutSubtreeIfNeeded()
-            let size = hosting.fittingSize
-            hosting.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: size.height))
-            let item = NSMenuItem()
-            item.view = hosting
-            item.isEnabled = false
-            item.representedObject = "menuCard"
-            menu.addItem(item)
-            if model.subtitleStyle == .info {
-                menu.addItem(.separator())
+        // Add a card for each enabled provider
+        for (index, provider) in enabledProviders.enumerated() {
+            if let model = self.menuCardModel(for: provider) {
+                let cardView = UsageMenuCardView(model: model)
+                let hosting = NSHostingView(rootView: cardView)
+                // Important: constrain width before asking SwiftUI for the fitting height, otherwise text wrapping
+                // changes the required height and the menu item becomes visually "squeezed".
+                hosting.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: 1))
+                hosting.layoutSubtreeIfNeeded()
+                let size = hosting.fittingSize
+                hosting.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: size.height))
+                let item = NSMenuItem()
+                item.view = hosting
+                item.isEnabled = false
+                item.representedObject = "menuCard-\(provider.rawValue)"
+                menu.addItem(item)
+                // Add separator between provider cards (but not after the last one)
+                if index < enabledProviders.count - 1 {
+                    menu.addItem(.separator())
+                }
             }
         }
 
-        if targetProvider == .codex,
+        // Add separator after cards if we have any
+        if !enabledProviders.isEmpty {
+            menu.addItem(.separator())
+        }
+
+        // Add Codex-specific submenus if Codex is enabled
+        if self.store.isEnabled(.codex),
            self.settings.openAIDashboardEnabled,
            self.store.openAIDashboard != nil,
            self.store.openAIDashboardRequiresLogin == false
@@ -1021,22 +1029,18 @@ extension StatusItemController {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        // Re-measure the menu card height right before display to avoid stale/incorrect sizing when content
+        // Re-measure all menu card heights right before display to avoid stale/incorrect sizing when content
         // changes (e.g. dashboard error lines causing wrapping).
-        if let item = menu.items.first(where: { ($0.representedObject as? String) == "menuCard" }),
-           let view = item.view
-        {
-            view.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: 1))
-            view.layoutSubtreeIfNeeded()
-            let height = view.fittingSize.height
-            view.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: height))
+        for item in menu.items where (item.representedObject as? String)?.hasPrefix("menuCard") == true {
+            if let view = item.view {
+                view.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: 1))
+                view.layoutSubtreeIfNeeded()
+                let height = view.fittingSize.height
+                view.frame = NSRect(origin: .zero, size: NSSize(width: Self.menuCardWidth, height: height))
+            }
         }
 
-        if let provider = self.menuProviders[ObjectIdentifier(menu)] {
-            self.lastMenuProvider = provider
-        } else {
-            self.lastMenuProvider = self.store.enabledProviders().first ?? .codex
-        }
+        self.lastMenuProvider = self.store.enabledProviders().first ?? .codex
     }
 
     private func selector(for action: MenuDescriptor.MenuAction) -> (Selector, Any?) {
