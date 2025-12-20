@@ -8,11 +8,17 @@ struct GeneralPane: View {
     @ObservedObject var store: UsageStore
     @State private var expandedErrors: Set<UsageProvider> = []
     @State private var openAIDashboardStatus: String?
+    @State private var showOpenAIWebFullDiskAccessAlert = false
+    @State private var lastOpenAIWebFullDiskAccessRetryAt: Date?
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 16) {
-                SettingsSection(contentSpacing: 8) {
+                SettingsSection(contentSpacing: 12) {
+                    Text("Providers")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
                     VStack(alignment: .leading, spacing: 8) {
                         PreferenceToggleRow(
                             title: self.store.metadata(for: .codex).toggleTitle,
@@ -20,9 +26,12 @@ struct GeneralPane: View {
                             binding: self.codexBinding)
 
                         self.codexSigningStatus()
-                        self.openAIDashboardLogin()
+                        if self.codexBinding.wrappedValue {
+                            self.openAIDashboardLogin()
+                                .padding(.leading, 22)
+                        }
                     }
-                    .padding(.bottom, 18)
+                    .padding(.bottom, 10)
 
                     if let display = self.providerErrorDisplay(.codex) {
                         ProviderErrorView(
@@ -45,11 +54,28 @@ struct GeneralPane: View {
                             isExpanded: self.expandedBinding(for: .claude),
                             onCopy: { self.copyToPasteboard(display.full) })
                     }
+
+                    PreferenceToggleRow(
+                        title: self.store.metadata(for: .gemini).toggleTitle,
+                        subtitle: self.providerSubtitle(.gemini),
+                        binding: self.geminiBinding)
+
+                    if let display = self.providerErrorDisplay(.gemini) {
+                        ProviderErrorView(
+                            title: "Last Gemini fetch failed:",
+                            display: display,
+                            isExpanded: self.expandedBinding(for: .gemini),
+                            onCopy: { self.copyToPasteboard(display.full) })
+                    }
                 }
 
                 Divider()
 
-                SettingsSection(contentSpacing: 6) {
+                SettingsSection(contentSpacing: 12) {
+                    Text("Notifications")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
                     PreferenceToggleRow(
                         title: "Session quota notifications",
                         subtitle: "Notifies when the 5-hour session quota hits 0% and when it becomes available again.",
@@ -58,16 +84,11 @@ struct GeneralPane: View {
 
                 Divider()
 
-                SettingsSection(contentSpacing: 6) {
-                    PreferenceToggleRow(
-                        title: "Show usage as used",
-                        subtitle: "Progress bars fill as you consume quota (instead of showing remaining).",
-                        binding: self.$settings.usageBarsShowUsed)
-                }
-
-                Divider()
-
-                SettingsSection(contentSpacing: 16) {
+                SettingsSection(contentSpacing: 12) {
+                    Text("System")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
                     PreferenceToggleRow(
                         title: "Start at Login",
                         subtitle: "Automatically opens CodexBar when you start your Mac.",
@@ -85,10 +106,14 @@ struct GeneralPane: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.retryOpenAIWebAfterPermissionChangeIfNeeded()
+        }
     }
 
     private var codexBinding: Binding<Bool> { self.binding(for: .codex) }
     private var claudeBinding: Binding<Bool> { self.binding(for: .claude) }
+    private var geminiBinding: Binding<Bool> { self.binding(for: .gemini) }
 
     private func binding(for provider: UsageProvider) -> Binding<Bool> {
         let meta = self.store.metadata(for: provider)
@@ -136,54 +161,49 @@ struct GeneralPane: View {
     private func openAIDashboardLogin() -> some View {
         SettingsSection(contentSpacing: 10) {
             PreferenceToggleRow(
-                title: "Access OpenAI via web (optional)",
+                title: "Access OpenAI via web",
                 subtitle: [
                     "Adds Code review + Usage breakdown (WebKit scrape).",
+                    "Reuses your Safari/Chrome chatgpt.com session via cookies (Safari → Chrome).",
                     "Credits still come from Codex CLI.",
-                    "Imports browser cookies (Chrome → Safari).",
                 ].joined(separator: " "),
                 binding: self.$settings.openAIDashboardEnabled)
 
             if self.settings.openAIDashboardEnabled {
-                VStack(alignment: .leading, spacing: 8) {
-                    let codexEmail = self.store.codexAccountEmailForOpenAIDashboard()
+                let status = self.openAIDashboardStatus ??
+                    self.store.openAIDashboardCookieImportStatus ??
+                    self.store.lastOpenAIDashboardError
 
-                    if let codexEmail, !codexEmail.isEmpty {
-                        Text("Codex account: \(codexEmail)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Codex account: unknown (dashboard will not auto-sync).")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let signedIn = self.store.openAIDashboard?.signedInEmail,
-                       !signedIn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    {
-                        Text("Dashboard session: \(signedIn)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Text("On enable: imports cookies (Chrome → Safari).")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-
-                    let status = self.openAIDashboardStatus ??
-                        self.store.openAIDashboardCookieImportStatus ??
-                        self.store.lastOpenAIDashboardError
-
-                    if let status, !status.isEmpty {
+                if let status, !status.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text(status)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(4)
-                    } else {
-                        Text(
-                            "Tip: stay signed in to chatgpt.com in Safari or Chrome; CodexBar will reuse that session.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+
+                        if self.needsOpenAIWebFullDiskAccess(status: status) {
+                            Button("Fix: enable Full Disk Access…") {
+                                self.showOpenAIWebFullDiskAccessAlert = true
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .alert("Enable Full Disk Access", isPresented: self.$showOpenAIWebFullDiskAccessAlert) {
+                                Button("Open System Settings") {
+                                    Self.openFullDiskAccessSettings()
+                                    self.openAIDashboardStatus = "Waiting for Full Disk Access…"
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text(
+                                    [
+                                        "CodexBar needs Full Disk Access to read Safari cookies " +
+                                            "(required for OpenAI web scraping).",
+                                        "System Settings → Privacy & Security → Full Disk Access " +
+                                            "→ add/enable CodexBar.",
+                                        "Then re-toggle “Access OpenAI via web” to import cookies again.",
+                                    ].joined(separator: "\n"))
+                            }
+                        }
                     }
                 }
             }
@@ -261,6 +281,46 @@ struct GeneralPane: View {
     }
 
     // MARK: - OpenAI dashboard auth
+
+    private func needsOpenAIWebFullDiskAccess(status: String) -> Bool {
+        let s = status.lowercased()
+        return s.contains("full disk access") && s.contains("safari")
+    }
+
+    private func retryOpenAIWebAfterPermissionChangeIfNeeded() {
+        guard self.settings.openAIDashboardEnabled else { return }
+        let status = self.openAIDashboardStatus ??
+            self.store.openAIDashboardCookieImportStatus ??
+            self.store.lastOpenAIDashboardError
+
+        guard let status, self.needsOpenAIWebFullDiskAccess(status: status) else { return }
+
+        let now = Date()
+        if let last = self.lastOpenAIWebFullDiskAccessRetryAt, now.timeIntervalSince(last) < 5 {
+            return
+        }
+        self.lastOpenAIWebFullDiskAccessRetryAt = now
+
+        self.openAIDashboardStatus = "Re-checking Full Disk Access…"
+        Task { @MainActor in
+            await self.store.importOpenAIDashboardBrowserCookiesNow()
+            self.openAIDashboardStatus = nil
+        }
+    }
+
+    private static func openFullDiskAccessSettings() {
+        // Best-effort deep link. On macOS 13 beta it used to open the wrong pane, but this has been stable on
+        // modern macOS releases again. Fall back to the Privacy pane if needed.
+        let urls: [URL] = [
+            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy"),
+            URL(string: "x-apple.systempreferences:com.apple.preference.security"),
+        ].compactMap(\.self)
+
+        for url in urls where NSWorkspace.shared.open(url) {
+            return
+        }
+    }
 }
 
 private struct ProviderErrorDisplay: Sendable {

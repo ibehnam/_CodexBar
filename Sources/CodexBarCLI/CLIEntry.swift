@@ -151,11 +151,21 @@ enum CodexBarCLI {
     }
 
     fileprivate static func decodeProvider(from values: ParsedValues) -> ProviderSelection {
-        if let raw = values.options["provider"]?.last, let parsed = ProviderSelection(argument: raw) {
+        let rawOverride = values.options["provider"]?.last
+        return Self.providerSelection(rawOverride: rawOverride, enabled: Self.enabledProvidersFromDefaults())
+    }
+
+    static func providerSelection(rawOverride: String?, enabled: [UsageProvider]) -> ProviderSelection {
+        if let rawOverride, let parsed = ProviderSelection(argument: rawOverride) {
             return parsed
         }
-        let enabled = Self.enabledProvidersFromDefaults()
-        if enabled.count == 2 { return .both }
+        if enabled.count >= 3 { return .all }
+        if enabled.count == 2 {
+            let hasCodex = enabled.contains(.codex)
+            let hasClaude = enabled.contains(.claude)
+            if hasCodex, hasClaude { return .both }
+            return .custom(enabled)
+        }
         if let first = enabled.first { return ProviderSelection(provider: first) }
         return .codex
     }
@@ -178,11 +188,17 @@ enum CodexBarCLI {
             VersionDetector.codexVersion()
         case .claude:
             ClaudeUsageFetcher().detectVersion()
+        case .gemini:
+            VersionDetector.geminiVersion()
         }
     }
 
     private static func formatVersion(provider: UsageProvider, raw: String?) -> (version: String?, source: String) {
-        let source = provider == .codex ? "codex-cli" : "claude"
+        let source = switch provider {
+        case .codex: "codex-cli"
+        case .claude: "claude"
+        case .gemini: "gemini-cli"
+        }
         guard let raw, !raw.isEmpty else { return (nil, source) }
         if let match = raw.range(of: #"(\d+(?:\.\d+)+)"#, options: .regularExpression) {
             let version = String(raw[match]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -264,6 +280,10 @@ enum CodexBarCLI {
                         accountOrganization: usage.accountOrganization,
                         loginMethod: usage.loginMethod),
                     credits: nil))
+            case .gemini:
+                let probe = GeminiStatusProbe()
+                let snap = try await probe.fetch()
+                return .success((usage: snap.toUsageSnapshot(), credits: nil))
             }
         } catch {
             return .failure(error)
@@ -287,6 +307,7 @@ enum CodexBarCLI {
                 dailyBreakdown: OpenAIDashboardSnapshot.makeDailyBreakdown(
                     from: cache.snapshot.creditEvents,
                     maxDays: 30),
+                usageBreakdown: cache.snapshot.usageBreakdown,
                 updatedAt: cache.snapshot.updatedAt)
         }
         return cache.snapshot
@@ -384,14 +405,17 @@ enum CodexBarCLI {
         switch error {
         case TTYCommandRunner.Error.binaryNotFound,
              CodexStatusProbeError.codexNotInstalled,
-             ClaudeUsageError.claudeNotInstalled:
+             ClaudeUsageError.claudeNotInstalled,
+             GeminiStatusProbeError.geminiNotInstalled:
             ExitCode(2)
         case CodexStatusProbeError.timedOut,
-             TTYCommandRunner.Error.timedOut:
+             TTYCommandRunner.Error.timedOut,
+             GeminiStatusProbeError.timedOut:
             ExitCode(4)
         case ClaudeUsageError.parseFailed,
              UsageError.decodeFailed,
-             UsageError.noRateLimitsFound:
+             UsageError.noRateLimitsFound,
+             GeminiStatusProbeError.parseFailed:
             ExitCode(3)
         default:
             .failure
@@ -429,34 +453,35 @@ enum CodexBarCLI {
         Darwin.exit(0)
     }
 
-    private static func usageHelp(version: String) -> String {
+    static func usageHelp(version: String) -> String {
         """
         CodexBar \(version)
 
         Usage:
-          codexbar usage [--format text|json] [--provider codex|claude|both]
+          codexbar usage [--format text|json] [--provider codex|claude|gemini|both|all]
                        [--no-credits] [--pretty] [--status] [--openai-web]
 
         Description:
           Print usage from enabled providers as text (default) or JSON. Honors your in-app toggles.
-          When --openai-web is set, CodexBar imports browser cookies (Chrome/Safari)
+          When --openai-web is set, CodexBar imports browser cookies (Safari → Chrome)
           and fetches the OpenAI web dashboard.
 
         Examples:
           codexbar usage
           codexbar usage --provider claude
-          codexbar usage --format json --provider both --pretty
+          codexbar usage --provider gemini
+          codexbar usage --format json --provider all --pretty
           codexbar usage --status
           codexbar usage --provider codex --openai-web --format json --pretty
         """
     }
 
-    private static func rootHelp(version: String) -> String {
+    static func rootHelp(version: String) -> String {
         """
         CodexBar \(version)
 
         Usage:
-          codexbar [--format text|json] [--provider codex|claude|both]
+          codexbar [--format text|json] [--provider codex|claude|gemini|both|all]
                   [--no-credits] [--pretty] [--status] [--openai-web]
 
         Global flags:
@@ -468,8 +493,8 @@ enum CodexBarCLI {
 
         Examples:
           codexbar
-          codexbar --format json --provider both --pretty
-          codexbar --provider claude
+          codexbar --format json --provider all --pretty
+          codexbar --provider gemini
         """
     }
 }
@@ -477,7 +502,7 @@ enum CodexBarCLI {
 // MARK: - Options & decoding helpers
 
 private struct UsageOptions: CommanderParsable {
-    @Option(name: .long("provider"), help: "Provider to query: codex | claude | both")
+    @Option(name: .long("provider"), help: "Provider to query: codex | claude | gemini | both | all")
     var provider: ProviderSelection?
 
     @Option(name: .long("format"), help: "Output format: text | json")
@@ -505,16 +530,21 @@ private struct UsageOptions: CommanderParsable {
     var openaiWebDebugDumpHtml: Bool = false
 }
 
-private enum ProviderSelection: String, Sendable, ExpressibleFromArgument {
+enum ProviderSelection: Sendable, ExpressibleFromArgument {
     case codex
     case claude
+    case gemini
     case both
+    case all
+    case custom([UsageProvider])
 
     init?(argument: String) {
         switch argument.lowercased() {
         case "codex": self = .codex
         case "claude": self = .claude
+        case "gemini": self = .gemini
         case "both": self = .both
+        case "all": self = .all
         default: return nil
         }
     }
@@ -523,6 +553,7 @@ private enum ProviderSelection: String, Sendable, ExpressibleFromArgument {
         switch provider {
         case .codex: self = .codex
         case .claude: self = .claude
+        case .gemini: self = .gemini
         }
     }
 
@@ -530,7 +561,10 @@ private enum ProviderSelection: String, Sendable, ExpressibleFromArgument {
         switch self {
         case .codex: [.codex]
         case .claude: [.claude]
+        case .gemini: [.gemini]
         case .both: [.codex, .claude]
+        case .all: [.codex, .claude, .gemini]
+        case let .custom(providers): providers
         }
     }
 }
@@ -614,6 +648,20 @@ private enum VersionDetector {
         let candidates = [
             ["--version"],
             ["version"],
+            ["-v"],
+        ]
+        for args in candidates {
+            if let version = Self.run(path: path, args: args) { return version }
+        }
+        return nil
+    }
+
+    static func geminiVersion() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = BinaryLocator.resolveGeminiBinary(env: env, loginPATH: nil)
+            ?? TTYCommandRunner.which("gemini") else { return nil }
+        let candidates = [
+            ["--version"],
             ["-v"],
         ]
         for args in candidates {

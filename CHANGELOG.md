@@ -1,15 +1,28 @@
 # Changelog
 
-## 0.9.0 — Unreleased
-- Optional OpenAI web access: reuses your signed-in browser session (Chrome/Safari cookie import) and scrapes the Codex usage dashboard.
-- Surfaces Codex “Code review” remaining (menu progress bar) plus usage breakdown + usage history submenus when data is available.
-- Credits remain sourced from the Codex CLI (no web login required for credits).
-- Per-account WebKit cookie jars (keeps multiple OpenAI accounts around; auto-syncs to the Codex CLI email).
-- CLI: `codexbar usage --openai-web` fetches and emits `openaiDashboard` JSON.
-- New “Show usage as used” toggle to invert progress bars (default remains “% left”).
+## 0.10.1 — Unreleased
+- Fix loading-state card spacing to avoid double separators.
+
+## 0.10.0 — 2025-12-20
+- Gemini provider support (usage, plan detection, login flow). Thanks @381181295!
+- Unified menu bar icon mode with a provider switcher and Merge Icons toggle (default on when multiple providers are enabled). Thanks @ibehnam!
+- Fix regression from 0.9.1 where CLI detection failed for some installs by restoring interactive login-shell PATH loading.
+
+## 0.9.1 — 2025-12-19
+- CLI resolution now uses the login shell PATH directly (no more heuristic path scanning), so Codex/Claude match your shell config reliably.
+
+## 0.9.0 — 2025-12-19
+- New optional OpenAI web access: reuses your signed-in Safari/Chrome session to show **Code review remaining**, **Usage breakdown**, and **Credits usage history** in the menu (no credentials stored).
+- Credits still come from the Codex CLI; OpenAI web access is only used for the dashboard extras above.
+- OpenAI web sessions auto-sync to the Codex CLI email, support multiple accounts, and reset/re-import cookies on account switches to avoid stale cross-account data.
+- Fix Chrome cookie import (macOS 10): signed-in Chrome sessions are detected reliably (thanks @tobihagemann!).
+- Usage breakdown submenu: compact chart with hover details for day/service totals.
+- New “Show usage as used” toggle to invert progress bars (default remains “% left”, now in Advanced).
+- Session (5-hour) reset now shows a relative countdown (“Resets in 3h 31m”) in the menu card for Codex and Claude.
+- Claude: fix reset parsing so “Resets …” can’t be mis-attributed to the wrong window (session vs weekly).
 
 ## 0.8.1 — 2025-12-17
-- Claude trust prompts (“Do you trust the files in this folder?”) are now auto-accepted during probes to prevent stuck refreshes.
+- Claude trust prompts (“Do you trust the files in this folder?”) are now auto-accepted during probes to prevent stuck refreshes. Thanks @tobihagemann!
 
 ## 0.8.0 — 2025-12-17
 - CodexBar is now available via Homebrew: `brew install --cask steipete/tap/codexbar` (updates via `brew upgrade --cask steipete/tap/codexbar`).

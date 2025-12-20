@@ -5,7 +5,6 @@ import OSLog
 import QuartzCore
 import Security
 import SwiftUI
-@preconcurrency import UserNotifications
 
 @main
 struct CodexBarApp: App {
@@ -196,19 +195,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PreferencesSelection())
     }
 }
-
-extension CodexBarApp {
-    private var codexSnapshot: UsageSnapshot? { self.store.snapshot(for: .codex) }
-    private var claudeSnapshot: UsageSnapshot? { self.store.snapshot(for: .claude) }
-    private var codexShouldAnimate: Bool {
-        self.store.isEnabled(.codex) && self.codexSnapshot == nil && !self.store.isStale(provider: .codex)
-    }
-
-    private var claudeShouldAnimate: Bool {
-        self.store.isEnabled(.claude) && self.claudeSnapshot == nil && !self.store.isStale(provider: .claude)
-    }
-}
-
 // MARK: - Status item controller (AppKit-hosted icons, SwiftUI popovers)
 
 protocol StatusItemControlling: AnyObject {}

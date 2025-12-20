@@ -72,12 +72,27 @@ final class SettingsStore: ObservableObject {
         didSet { self.objectWillChange.send() }
     }
 
+    /// Optional: collapse provider icons into a single menu bar item with an in-menu switcher.
+    @AppStorage("mergeIcons") var mergeIcons: Bool = true {
+        didSet { self.objectWillChange.send() }
+    }
+
+    @AppStorage("selectedMenuProvider") private var selectedMenuProviderRaw: String?
+
     /// Optional override for the loading animation pattern, exposed via the Debug tab.
     var debugLoadingPattern: LoadingPattern? {
         get { self.debugLoadingPatternRaw.flatMap(LoadingPattern.init(rawValue:)) }
         set {
             self.objectWillChange.send()
             self.debugLoadingPatternRaw = newValue?.rawValue
+        }
+    }
+
+    var selectedMenuProvider: UsageProvider? {
+        get { self.selectedMenuProviderRaw.flatMap(UsageProvider.init(rawValue:)) }
+        set {
+            self.objectWillChange.send()
+            self.selectedMenuProviderRaw = newValue?.rawValue
         }
     }
 
@@ -117,18 +132,36 @@ final class SettingsStore: ObservableObject {
     private func runInitialProviderDetectionIfNeeded(force: Bool = false) {
         guard force || !self.providerDetectionCompleted else { return }
         guard let codexMeta = ProviderRegistry.shared.metadata[.codex],
-              let claudeMeta = ProviderRegistry.shared.metadata[.claude] else { return }
+              let claudeMeta = ProviderRegistry.shared.metadata[.claude],
+              let geminiMeta = ProviderRegistry.shared.metadata[.gemini] else { return }
 
+        LoginShellPathCache.shared.captureOnce { [weak self] _ in
+            Task { @MainActor in
+                self?.applyProviderDetection(codexMeta: codexMeta, claudeMeta: claudeMeta, geminiMeta: geminiMeta)
+            }
+        }
+    }
+
+    private func applyProviderDetection(
+        codexMeta: ProviderMetadata,
+        claudeMeta: ProviderMetadata,
+        geminiMeta: ProviderMetadata)
+    {
+        guard !self.providerDetectionCompleted else { return }
         let codexInstalled = BinaryLocator.resolveCodexBinary() != nil
         let claudeInstalled = BinaryLocator.resolveClaudeBinary() != nil
+        let geminiInstalled = BinaryLocator.resolveGeminiBinary() != nil
 
-        // If neither is installed, keep Codex enabled to match previous behavior.
-        let enableCodex = codexInstalled || (!codexInstalled && !claudeInstalled)
+        // If none installed, keep Codex enabled to match previous behavior.
+        let noneInstalled = !codexInstalled && !claudeInstalled && !geminiInstalled
+        let enableCodex = codexInstalled || noneInstalled
         let enableClaude = claudeInstalled
+        let enableGemini = geminiInstalled
 
         self.objectWillChange.send()
         self.toggleStore.setEnabled(enableCodex, metadata: codexMeta)
         self.toggleStore.setEnabled(enableClaude, metadata: claudeMeta)
+        self.toggleStore.setEnabled(enableGemini, metadata: geminiMeta)
         self.providerDetectionCompleted = true
     }
 }

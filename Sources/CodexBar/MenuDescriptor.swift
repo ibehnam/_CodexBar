@@ -66,14 +66,17 @@ struct MenuDescriptor {
                 codex: store.snapshot(for: .codex),
                 account: account,
                 preferClaude: true))
+        case .gemini?:
+            sections.append(Self.usageSection(for: .gemini, store: store))
+            sections.append(Self.accountSection(
+                claude: nil,
+                codex: nil,
+                account: account,
+                preferClaude: false))
         case nil:
             var addedUsage = false
-            if store.isEnabled(.codex) {
-                sections.append(Self.usageSection(for: .codex, store: store))
-                addedUsage = true
-            }
-            if store.isEnabled(.claude) {
-                sections.append(Self.usageSection(for: .claude, store: store))
+            for enabledProvider in store.enabledProviders() {
+                sections.append(Self.usageSection(for: enabledProvider, store: store))
                 addedUsage = true
             }
             if addedUsage {
@@ -179,9 +182,11 @@ struct MenuDescriptor {
             .action("Refresh Now", .refresh),
         ]
 
-        // Always show Switch Account…; pick the most relevant provider and never drop the row.
+        // Show "Add Account" if no account, "Switch Account" if logged in
         let loginAction = self.switchAccountTarget(for: provider, store: store)
-        entries.append(.action("Switch Account...", loginAction))
+        let hasAccount = self.hasAccount(for: provider, store: store)
+        let accountLabel = hasAccount ? "Switch Account..." : "Add Account..."
+        entries.append(.action(accountLabel, loginAction))
 
         entries.append(contentsOf: [
             .action("Usage Dashboard", .dashboard),
@@ -221,16 +226,24 @@ struct MenuDescriptor {
     private static func switchAccountTarget(for provider: UsageProvider?, store: UsageStore) -> MenuAction {
         if let provider { return .switchAccount(provider) }
         if let enabled = store.enabledProviders().first { return .switchAccount(enabled) }
-        // Fallback to Codex then Claude so the menu item never disappears, even if probes temporarily mark both
-        // disabled.
-        return .switchAccount(store.isEnabled(.codex) ? .codex : .claude)
+        return .switchAccount(.codex)
+    }
+
+    private static func hasAccount(for provider: UsageProvider?, store: UsageStore) -> Bool {
+        let target = provider ?? store.enabledProviders().first ?? .codex
+        return store.snapshot(for: target)?.accountEmail != nil
     }
 
     private static func appendRateWindow(entries: inout [Entry], title: String, window: RateWindow) {
         let line = UsageFormatter
             .usageLine(remaining: window.remainingPercent, used: window.usedPercent)
         entries.append(.text("\(title): \(line)", .primary))
-        if let reset = window.resetDescription { entries.append(.text(Self.resetLine(reset), .secondary)) }
+        if let date = window.resetsAt {
+            let countdown = UsageFormatter.resetCountdownDescription(from: date)
+            entries.append(.text("Resets \(countdown)", .secondary))
+        } else if let reset = window.resetDescription {
+            entries.append(.text(Self.resetLine(reset), .secondary))
+        }
     }
 
     private static func resetLine(_ reset: String) -> String {

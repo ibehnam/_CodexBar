@@ -15,6 +15,9 @@ import SQLite3
 /// - We never persist the imported cookies ourselves. We only inject them into WebKit's `WKWebsiteDataStore`
 ///   cookie jar for the chosen CodexBar dashboard account.
 enum ChromeCookieImporter {
+    private static let chromeSafeStorageKeyLock = NSLock()
+    private nonisolated(unsafe) static var cachedChromeSafeStorageKey: Data?
+
     enum ImportError: LocalizedError {
         case cookieDBNotFound(path: String)
         case keychainDenied
@@ -45,15 +48,20 @@ enum ChromeCookieImporter {
     }
 
     static func loadChatGPTCookiesFromAllProfiles() throws -> [CookieSource] {
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library")
-            .appendingPathComponent("Application Support")
-            .appendingPathComponent("Google")
-            .appendingPathComponent("Chrome")
+        let roots = self.candidateHomes().map { home in
+            home.appendingPathComponent("Library")
+                .appendingPathComponent("Application Support")
+                .appendingPathComponent("Google")
+                .appendingPathComponent("Chrome")
+        }
 
-        let candidates = Self.chromeProfileCookieDBs(root: root)
+        var candidates: [ChromeProfileCandidate] = []
+        for root in roots {
+            candidates.append(contentsOf: Self.chromeProfileCookieDBs(root: root))
+        }
         if candidates.isEmpty {
-            throw ImportError.cookieDBNotFound(path: root.path)
+            let display = roots.map(\.path).joined(separator: " • ")
+            throw ImportError.cookieDBNotFound(path: display)
         }
 
         let chromeKey = try Self.chromeSafeStorageKey()
@@ -159,6 +167,13 @@ enum ChromeCookieImporter {
     // MARK: - Keychain + crypto
 
     private static func chromeSafeStorageKey() throws -> Data {
+        self.chromeSafeStorageKeyLock.lock()
+        if let cached = self.cachedChromeSafeStorageKey {
+            self.chromeSafeStorageKeyLock.unlock()
+            return cached
+        }
+        self.chromeSafeStorageKeyLock.unlock()
+
         // Prefer the main Chrome label; fall back to common Chromium forks.
         let labels: [(service: String, account: String)] = [
             ("Chrome Safe Storage", "Chrome"),
@@ -200,10 +215,15 @@ enum ChromeCookieImporter {
         guard result == kCCSuccess else {
             throw ImportError.keychainDenied
         }
+
+        self.chromeSafeStorageKeyLock.lock()
+        self.cachedChromeSafeStorageKey = key
+        self.chromeSafeStorageKeyLock.unlock()
         return key
     }
 
-    private static func decryptChromiumValue(_ encryptedValue: Data, key: Data) -> String? {
+    // Exposed for tests.
+    static func decryptChromiumValue(_ encryptedValue: Data, key: Data) -> String? {
         // macOS Chrome cookies typically have `v10` prefix and AES-CBC payload.
         guard encryptedValue.count > 3 else { return nil }
         let prefix = encryptedValue.prefix(3)
@@ -241,7 +261,27 @@ enum ChromeCookieImporter {
         }
         guard status == kCCSuccess else { return nil }
         out.count = outLength
-        return String(data: out, encoding: .utf8)
+
+        // Chromium's macOS cookie encryption prefixes 32 bytes of non-UTF8 data before the actual cookie value.
+        // Other libraries strip this (see `chrome-cookies-secure` / `browser_cookie3`); we do the same so we can
+        // build valid `HTTPCookie`s from decrypted values.
+        let candidate = out.count > 32 ? out.dropFirst(32) : out[...]
+        if let decoded = String(data: Data(candidate), encoding: .utf8) {
+            return Self.cleanValue(decoded)
+        }
+        if let decoded = String(data: out, encoding: .utf8) {
+            return Self.cleanValue(decoded)
+        }
+        return nil
+    }
+
+    private static func cleanValue(_ value: String) -> String {
+        // Strip leading control chars (some decryptors still return values with a few leading bytes).
+        var i = value.startIndex
+        while i < value.endIndex, value[i].unicodeScalars.allSatisfy({ $0.value < 0x20 }) {
+            i = value.index(after: i)
+        }
+        return String(value[i...])
     }
 
     private static func findGenericPassword(service: String, account: String) -> String? {
@@ -334,6 +374,24 @@ enum ChromeCookieImporter {
             ChromeProfileCandidate(
                 label: "Chrome \(dir.lastPathComponent)",
                 cookiesDB: dir.appendingPathComponent("Cookies"))
+        }
+    }
+
+    private static func candidateHomes() -> [URL] {
+        var homes: [URL] = []
+        homes.append(FileManager.default.homeDirectoryForCurrentUser)
+        if let userHome = NSHomeDirectoryForUser(NSUserName()) {
+            homes.append(URL(fileURLWithPath: userHome))
+        }
+        if let envHome = ProcessInfo.processInfo.environment["HOME"], !envHome.isEmpty {
+            homes.append(URL(fileURLWithPath: envHome))
+        }
+        var seen = Set<String>()
+        return homes.filter { home in
+            let path = home.path
+            guard !seen.contains(path) else { return false }
+            seen.insert(path)
+            return true
         }
     }
 }

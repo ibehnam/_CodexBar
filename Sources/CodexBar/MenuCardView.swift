@@ -84,7 +84,9 @@ struct UsageMenuCardView: View {
                 }
             }
 
-            Divider()
+            if self.hasDetails {
+                Divider()
+            }
 
             if self.model.metrics.isEmpty {
                 if let placeholder = self.model.placeholder {
@@ -139,6 +141,10 @@ struct UsageMenuCardView: View {
         .padding(.top, 4)
         .padding(.bottom, 4)
         .frame(minWidth: 300, maxWidth: 300, alignment: .leading)
+    }
+
+    private var hasDetails: Bool {
+        !self.model.metrics.isEmpty || self.model.placeholder != nil
     }
 
     private var subtitleColor: Color {
@@ -209,7 +215,7 @@ extension UsageMenuCardView.Model {
         case .codex:
             if let email = snapshot?.accountEmail, !email.isEmpty { return email }
             if let email = account.email, !email.isEmpty { return email }
-        case .claude:
+        case .claude, .gemini:
             if let email = snapshot?.accountEmail, !email.isEmpty { return email }
         }
         return ""
@@ -220,7 +226,7 @@ extension UsageMenuCardView.Model {
         case .codex:
             if let plan = snapshot?.loginMethod, !plan.isEmpty { return self.planDisplay(plan) }
             if let plan = account.plan, !plan.isEmpty { return Self.planDisplay(plan) }
-        case .claude:
+        case .claude, .gemini:
             if let plan = snapshot?.loginMethod, !plan.isEmpty { return self.planDisplay(plan) }
         }
         return nil
@@ -266,14 +272,14 @@ extension UsageMenuCardView.Model {
             title: metadata.sessionLabel,
             percent: Self.clamped(usageBarsShowUsed ? snapshot.primary.usedPercent : snapshot.primary.remainingPercent),
             percentStyle: percentStyle,
-            resetText: Self.resetText(for: snapshot.primary)))
+            resetText: Self.resetText(for: snapshot.primary, prefersCountdown: true)))
         if let weekly = snapshot.secondary {
             metrics.append(Metric(
                 id: "secondary",
                 title: metadata.weeklyLabel,
                 percent: Self.clamped(usageBarsShowUsed ? weekly.usedPercent : weekly.remainingPercent),
                 percentStyle: percentStyle,
-                resetText: Self.resetText(for: weekly)))
+                resetText: Self.resetText(for: weekly, prefersCountdown: true)))
         }
         if metadata.supportsOpus, let opus = snapshot.tertiary {
             metrics.append(Metric(
@@ -281,7 +287,7 @@ extension UsageMenuCardView.Model {
                 title: metadata.opusLabel ?? "Sonnet",
                 percent: Self.clamped(usageBarsShowUsed ? opus.usedPercent : opus.remainingPercent),
                 percentStyle: percentStyle,
-                resetText: Self.resetText(for: opus)))
+                resetText: Self.resetText(for: opus, prefersCountdown: true)))
         }
 
         if provider == .codex, let remaining = dashboard?.codeReviewRemainingPercent {
@@ -327,11 +333,16 @@ extension UsageMenuCardView.Model {
             Color(red: 73 / 255, green: 163 / 255, blue: 176 / 255)
         case .claude:
             Color(red: 204 / 255, green: 124 / 255, blue: 94 / 255)
+        case .gemini:
+            Color(red: 171 / 255, green: 135 / 255, blue: 234 / 255) // #AB87EA
         }
     }
 
-    private static func resetText(for window: RateWindow) -> String? {
+    private static func resetText(for window: RateWindow, prefersCountdown: Bool) -> String? {
         if let date = window.resetsAt {
+            if prefersCountdown {
+                return "Resets \(UsageFormatter.resetCountdownDescription(from: date))"
+            }
             return "Resets \(UsageFormatter.resetDescription(from: date))"
         }
 

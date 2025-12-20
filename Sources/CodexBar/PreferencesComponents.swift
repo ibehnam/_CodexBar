@@ -8,7 +8,7 @@ struct PreferenceToggleRow: View {
     @Binding var binding: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5.4) {
             Toggle(isOn: self.$binding) {
                 Text(self.title)
                     .font(.body)
@@ -75,12 +75,13 @@ struct AboutLinkRow: View {
         Button {
             if let url = URL(string: self.url) { NSWorkspace.shared.open(url) }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: self.icon)
                 Text(self.title)
                     .underline(self.hovering, color: .accentColor)
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
             .foregroundColor(.accentColor)
         }
         .buttonStyle(.plain)
