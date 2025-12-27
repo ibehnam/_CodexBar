@@ -46,6 +46,7 @@ struct ClaudeProviderImplementation: ProviderImplementation {
         settings: SettingsStore,
         hasWebSession: () -> Bool = { ClaudeWebAPIFetcher.hasSessionKey() }) -> ClaudeUsageStrategy
     {
+        // When debug menu is enabled, respect the explicit user preference
         if settings.debugMenuEnabled {
             let dataSource = settings.claudeUsageDataSource
             if dataSource == .oauth {
@@ -59,9 +60,25 @@ struct ClaudeProviderImplementation: ProviderImplementation {
             return ClaudeUsageStrategy(dataSource: dataSource, useWebExtras: useWebExtras)
         }
 
+        // Auto-detect best data source with improved fallback:
+        // 1. OAuth (works with keychain or ~/.claude/.credentials.json)
+        // 2. Web (requires browser cookies)
+        // 3. CLI (last resort, can hang in non-PTY contexts)
         let hasSession = hasWebSession()
-        let dataSource: ClaudeUsageDataSource = hasSession ? .web : .cli
-        return ClaudeUsageStrategy(dataSource: dataSource, useWebExtras: false)
+
+        // Try OAuth first if credentials exist
+        let hasOAuthCreds = (try? ClaudeOAuthCredentialsStore.load()) != nil
+        if hasOAuthCreds {
+            return ClaudeUsageStrategy(dataSource: .oauth, useWebExtras: false)
+        }
+
+        // Fall back to web if browser session exists
+        if hasSession {
+            return ClaudeUsageStrategy(dataSource: .web, useWebExtras: false)
+        }
+
+        // Last resort: CLI (may fail in non-interactive contexts)
+        return ClaudeUsageStrategy(dataSource: .cli, useWebExtras: false)
     }
 
     func makeFetch(context: ProviderBuildContext) -> @Sendable () async throws -> UsageSnapshot {
