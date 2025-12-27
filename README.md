@@ -39,6 +39,26 @@ swift build -c release          # or debug for development
 open CodexBar.app
 ```
 
+### Building without an Apple Developer account
+If you don't have an Apple Developer account, use the ad-hoc signing script:
+
+```bash
+./Scripts/build_unsigned.sh        # builds with ad-hoc signing (release by default)
+./Scripts/build_unsigned.sh debug  # or build debug version
+open CodexBar.app
+```
+
+**Note:** Ad-hoc signed apps:
+- Run on your local Mac
+- Cannot be distributed to others (Gatekeeper will block)
+- May have limited keychain access (use `~/.claude/.credentials.json` for Claude OAuth)
+- Auto-updates won't work (requires proper code signing)
+
+To export Claude credentials for ad-hoc builds:
+```bash
+security find-generic-password -s "Claude Code-credentials" -w > ~/.claude/.credentials.json
+```
+
 ## Adding a provider
 - Start here: `docs/provider.md` (provider authoring guide + target architecture).
 
