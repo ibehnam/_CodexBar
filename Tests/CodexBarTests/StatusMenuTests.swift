@@ -10,7 +10,6 @@ struct StatusMenuTests {
     func remembersProviderWhenMenuOpens() {
         let settings = SettingsStore(zaiTokenStore: NoopZaiTokenStore())
         settings.statusChecksEnabled = false
-        settings.refreshFrequency = .manual
         settings.mergeIcons = true
 
         let registry = ProviderRegistry.shared
@@ -50,7 +49,6 @@ struct StatusMenuTests {
     func hidesOpenAIWebSubmenusWhenNoHistory() {
         let settings = SettingsStore(zaiTokenStore: NoopZaiTokenStore())
         settings.statusChecksEnabled = false
-        settings.refreshFrequency = .manual
         settings.mergeIcons = true
         settings.selectedMenuProvider = .codex
 
@@ -94,7 +92,6 @@ struct StatusMenuTests {
     func showsOpenAIWebSubmenusWhenHistoryExists() {
         let settings = SettingsStore(zaiTokenStore: NoopZaiTokenStore())
         settings.statusChecksEnabled = false
-        settings.refreshFrequency = .manual
         settings.mergeIcons = true
         settings.selectedMenuProvider = .codex
 
@@ -153,7 +150,6 @@ struct StatusMenuTests {
     func showsCreditsBeforeCostInCodexMenuCardSections() {
         let settings = SettingsStore(zaiTokenStore: NoopZaiTokenStore())
         settings.statusChecksEnabled = false
-        settings.refreshFrequency = .manual
         settings.mergeIcons = true
         settings.selectedMenuProvider = .codex
         settings.costUsageEnabled = true
@@ -218,7 +214,6 @@ struct StatusMenuTests {
     func showsExtraUsageForClaudeWhenUsingMenuCardSections() {
         let settings = SettingsStore(zaiTokenStore: NoopZaiTokenStore())
         settings.statusChecksEnabled = false
-        settings.refreshFrequency = .manual
         settings.mergeIcons = true
         settings.selectedMenuProvider = .claude
         settings.costUsageEnabled = true

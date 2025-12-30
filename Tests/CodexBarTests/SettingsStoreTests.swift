@@ -6,33 +6,7 @@ import Testing
 @MainActor
 @Suite
 struct SettingsStoreTests {
-    @Test
-    func defaultRefreshFrequencyIsFiveMinutes() {
-        let suite = "SettingsStoreTests-default"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-
-        let store = SettingsStore(userDefaults: defaults, zaiTokenStore: NoopZaiTokenStore())
-
-        #expect(store.refreshFrequency == .fiveMinutes)
-        #expect(store.refreshFrequency.seconds == 300)
-    }
-
-    @Test
-    func persistsRefreshFrequencyAcrossInstances() {
-        let suite = "SettingsStoreTests-persist"
-        let defaultsA = UserDefaults(suiteName: suite)!
-        defaultsA.removePersistentDomain(forName: suite)
-        let storeA = SettingsStore(userDefaults: defaultsA, zaiTokenStore: NoopZaiTokenStore())
-
-        storeA.refreshFrequency = .fifteenMinutes
-
-        let defaultsB = UserDefaults(suiteName: suite)!
-        let storeB = SettingsStore(userDefaults: defaultsB, zaiTokenStore: NoopZaiTokenStore())
-
-        #expect(storeB.refreshFrequency == .fifteenMinutes)
-        #expect(storeB.refreshFrequency.seconds == 900)
-    }
+    // RefreshFrequency tests removed - refresh is now change-driven with a polling fallback.
 
     @Test
     func persistsSelectedMenuProviderAcrossInstances() {

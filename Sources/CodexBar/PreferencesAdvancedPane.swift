@@ -12,26 +12,6 @@ struct AdvancedPane: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 16) {
-                SettingsSection(contentSpacing: 6) {
-                    Text("Refresh cadence")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: self.$settings.refreshFrequency) {
-                        ForEach(RefreshFrequency.allCases) { option in
-                            Text(option.label).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if self.settings.refreshFrequency == .manual {
-                        Text("Auto-refresh is off; use the menu's Refresh command.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Divider()
-
                 SettingsSection(contentSpacing: 12) {
                     Text("Display")
                         .font(.caption)

@@ -3,35 +3,8 @@ import CodexBarCore
 import Observation
 import ServiceManagement
 
-enum RefreshFrequency: String, CaseIterable, Identifiable {
-    case manual
-    case oneMinute
-    case twoMinutes
-    case fiveMinutes
-    case fifteenMinutes
-
-    var id: String { self.rawValue }
-
-    var seconds: TimeInterval? {
-        switch self {
-        case .manual: nil
-        case .oneMinute: 60
-        case .twoMinutes: 120
-        case .fiveMinutes: 300
-        case .fifteenMinutes: 900
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .manual: "Manual"
-        case .oneMinute: "1 min"
-        case .twoMinutes: "2 min"
-        case .fiveMinutes: "5 min"
-        case .fifteenMinutes: "15 min"
-        }
-    }
-}
+// RefreshFrequency removed - refresh is now change-driven with a polling fallback.
+// The menubar icon updates automatically when quota data changes.
 
 @MainActor
 @Observable
@@ -41,10 +14,6 @@ final class SettingsStore {
     /// Stored as raw `UsageProvider` strings so new providers can be appended automatically without breaking.
     private var providerOrderRaw: [String] {
         didSet { self.userDefaults.set(self.providerOrderRaw, forKey: "providerOrder") }
-    }
-
-    var refreshFrequency: RefreshFrequency {
-        didSet { self.userDefaults.set(self.refreshFrequency.rawValue, forKey: "refreshFrequency") }
     }
 
     var launchAtLogin: Bool {
@@ -203,7 +172,6 @@ final class SettingsStore {
 
     var menuObservationToken: Int {
         _ = self.providerOrderRaw
-        _ = self.refreshFrequency
         _ = self.launchAtLogin
         _ = self.debugMenuEnabled
         _ = self.statusChecksEnabled
@@ -261,8 +229,6 @@ final class SettingsStore {
         self.zaiTokenStore = zaiTokenStore
         self.copilotTokenStore = copilotTokenStore
         self.providerOrderRaw = userDefaults.stringArray(forKey: "providerOrder") ?? []
-        let raw = userDefaults.string(forKey: "refreshFrequency") ?? RefreshFrequency.fiveMinutes.rawValue
-        self.refreshFrequency = RefreshFrequency(rawValue: raw) ?? .fiveMinutes
         self.launchAtLogin = userDefaults.object(forKey: "launchAtLogin") as? Bool ?? false
         self.debugMenuEnabled = userDefaults.object(forKey: "debugMenuEnabled") as? Bool ?? false
         self.debugLoadingPatternRaw = userDefaults.string(forKey: "debugLoadingPattern")
